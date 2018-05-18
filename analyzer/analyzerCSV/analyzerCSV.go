@@ -17,7 +17,6 @@ package analyzerCSV
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -53,7 +52,7 @@ import (
 	sessionpb "github.com/google/battery-historian/pb/session_proto"
 	usagepb "github.com/google/battery-historian/pb/usagestats_proto"
 	"encoding/csv"
-	strconv "strconv"
+	"strconv"
 )
 
 
@@ -220,132 +219,7 @@ func (pd *ParsedData) Cleanup() {
 	}
 }
 
-// SendAsJSON creates and sends the HTML output and json response from the ParsedData.
-func (pd *ParsedData) SendAsJSON(w http.ResponseWriter, r *http.Request) {
-	if err := pd.processKernelTrace(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Append any parsed kernel or power monitor CSVs to the Historian V2 CSV.
-	if err := pd.appendCSVs(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	var buf bytes.Buffer
-	var merge presenter.MultiFileHTMLData
-	if len(pd.data) == numberOfFilesToCompare {
-		merge = presenter.MultiFileData(pd.data)
-		if err := compareTempl.Execute(&buf, merge); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	} else {
-		if pd.brSaveErr != nil {
-			pd.data[0].Error = strings.Join([]string{pd.data[0].Error, pd.brSaveErr.Error()}, "\n")
-		}
-		if pd.kernelSaveErr != nil {
-			pd.data[0].Error = strings.Join([]string{pd.data[0].Error, pd.kernelSaveErr.Error()}, "\n")
-		}
-		if err := resultTempl.Execute(&buf, pd.data[0]); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-	unzipped, err := json.Marshal(uploadResponseCompare{
-		UploadResponse:  pd.responseArr,
-		HTML:            buf.String(),
-		UsingComparison: (len(pd.data) == numberOfFilesToCompare),
-		CombinedCheckin: merge.CombinedCheckinData,
-		SystemUIDecoder: activity.Decoder(),
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-
-	// Gzip data if it's accepted by the requester.
-	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-		gzipped, err := historianutils.GzipCompress(unzipped)
-		if err == nil {
-			w.Header().Add("Content-Encoding", "gzip")
-			w.Write(gzipped)
-			return
-		}
-		// Send ungzipped data.
-		log.Printf("failed to gzip data: %v", err)
-	}
-	w.Write(unzipped)
-}
-
-// processKernelTrace converts the kernel trace file with a bug report into a Historian parseable format, and then parses the result into a CSV.
-func (pd *ParsedData) processKernelTrace() error {
-	// No kernel trace file to process.
-	if pd.kernelTrace == "" {
-		return nil
-	}
-	if pd.bugReport == "" {
-		return errors.New("no bug report found for the provided kernel trace file")
-	}
-	if !kernel.IsSupportedDevice(pd.deviceType) {
-		return fmt.Errorf("device %v not supported for kernel trace file parsing", pd.deviceType)
-	}
-	// Call the python script to convert the trace file into a Historian parseable format.
-	csv, err := generateKernelCSV(pd.bugReport, pd.kernelTrace, pd.deviceType)
-	if strings.TrimSpace(csv) == "" {
-		return errors.New("no CSV output was generated from the kernel trace file")
-	}
-	if err != nil {
-		return err
-	}
-	// Parse the file as a kernel wakesource trace file.
-	return pd.parseKernelFile(pd.kernelTrace, csv)
-}
-
-// Data returns the data field from ParsedData
-func (pd *ParsedData) Data() []presenter.HTMLData {
-	return pd.data
-}
-
-// appendCSVs adds the parsed kernel and/or power monitor CSVs to the HistorianV2Logs slice.
-func (pd *ParsedData) appendCSVs() error {
-	// Need to append the kernel and power monitor CSV entries to the end of the existing CSV.
-	if pd.kd != nil {
-		if len(pd.data) == 0 {
-			return errors.New("no bug report found for the provided kernel trace file")
-		}
-		if len(pd.data) > 1 {
-			return errors.New("kernel trace file uploaded with more than one bug report")
-		}
-		pd.responseArr[0].HistorianV2Logs = append(pd.responseArr[0].HistorianV2Logs, historianV2Log{Source: kernelTrace, CSV: pd.kd.csv})
-		pd.data[0].Error += historianutils.ErrorsToString(pd.kd.errs)
-	}
-
-	if pd.md != nil {
-		if len(pd.data) == 0 {
-			return errors.New("no bug report found for the provided power monitor file")
-		}
-		if len(pd.data) > 1 {
-			return errors.New("power monitor file uploaded with more than one bug report")
-		}
-		pd.responseArr[0].DisplayPowerMonitor = true
-		// Need to append the power monitor CSV entries to the end of the existing CSV.
-		pd.responseArr[0].HistorianV2Logs = append(pd.responseArr[0].HistorianV2Logs, historianV2Log{Source: powerMonitorLog, CSV: pd.md.csv})
-		pd.data[0].Error += historianutils.ErrorsToString(pd.md.errs)
-	}
-	return nil
-}
-
-// parseKernelFile processes the kernel file and stores the result in the ParsedData.
-func (pd *ParsedData) parseKernelFile(fname, contents string) error {
-	// Try to parse the file as a kernel file.
-	if valid, output, extraErrs := kernel.Parse(contents); valid {
-		pd.kd = &csvData{output, extraErrs}
-		return nil
-	}
-	return fmt.Errorf("%v: invalid kernel wakesource trace file", fname)
-}
 
 // parsePowerMonitorFile processes the power monitor file and stores the result in the ParsedData.
 func (pd *ParsedData) parsePowerMonitorFile(fname, contents string) error {
