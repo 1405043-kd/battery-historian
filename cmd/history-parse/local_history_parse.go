@@ -24,8 +24,8 @@ import (
 	"path/filepath"
 
 	"github.com/google/battery-historian/bugreportutils"
+	"github.com/google/battery-historian/packageutils"
 	"github.com/google/battery-historian/parseutils"
-	"github.com/google/battery-historian/analyzer"
 )
 
 var (
@@ -60,140 +60,60 @@ func checkFlags() {
 // Writes csv data to csvWriter if a csv file is specified.
 func processFile(filePath string, csvWriter *bufio.Writer, isFirstFile bool) string {
 	// Read the whole file
-	directoryName := "F:/bugreports"
-	bugZips, err := ioutil.ReadDir(directoryName)
+	c, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	//added new kanak/
+	br, fname, err := bugreportutils.ExtractBugReport(filePath, c)
+	if err != nil {
+		log.Fatalf("Error getting file contents: %v", err)
+	}
+	fmt.Printf("Parsing %s\n", fname)
 
-	fs := make(map[string]analyzer.UploadedFile)
-	var counterGlobal int64=0
-	var fileNameCSV string=""
-	for _, b_f := range bugZips {
-		counterGlobal++
-		log.Println(b_f.Name())
-		//debugDone//ca, err := ioutil.ReadFile(directoryName + "/" + f.Name())
-		//debugDone//Print(err)
-		//debugDone//log.Print(ca)
-
-		log.Print("lol")
-		//files, err := bugreportutils.Contents(part.FileName(), b)
-		//debugCOmment//filePath:="C:/adb/bugreport-N2G47H-2018-04-22-23-47-36.zip"
-		filePath:=directoryName + "/" + b_f.Name()
-		b, _ := ioutil.ReadFile(filePath)
-		//log.Print(b)
-		files, err := bugreportutils.Contents(b_f.Name(), b)
-		fileNameCSV = b_f.Name()
-		//log.Print(files)
-		//br, files, err := bugreportutils.ExtractBugReport(filePath, b)
-		//log.Print(br)
-
-
-
-		if err != nil {
-			log.Print("failed to read file contents: %v", err)
-			return err.Error()
-		}
-
-		var contents []byte
-		valid := false
-		fname := ""
-
-		contentLoop:
-			for n, f := range files {
-				if bugreportutils.IsBugReport(f) {
-					// TODO: handle the case of additional kernel and power monitor files within a single uploaded file
-					valid = true
-					contents = f
-					fname = n
-					break contentLoop
-				}
-			}
-
-			if !valid {
-				log.Print("does not contain a valid %s file", fname)
-				return "not valid error"
-			}
-
-
-			fs["bugreport"] = analyzer.UploadedFile{"bugreport", fname, contents}
-
-
-
-			analyzer.AnalyzeAndResponse(fs, counterGlobal, fileNameCSV)
-
-
-
+	writer := ioutil.Discard
+	if csvWriter != nil && *summaryFormat == parseutils.FormatTotalTime {
+		writer = csvWriter
 	}
 
+	pkgs, errs := packageutils.ExtractAppsFromBugReport(br)
+	if len(errs) > 0 {
+		log.Printf("Errors encountered when getting package list: %v\n", errs)
+	}
+	upm, errs := parseutils.UIDAndPackageNameMapping(br, pkgs)
+	if len(errs) > 0 {
+		log.Printf("Errors encountered when generating package mapping: %v\n", errs)
+	}
+	rep := parseutils.AnalyzeHistory(writer, br, *summaryFormat, upm, *scrubPII)
 
-	return "yahhoooo"
-		///adeed blocks end here
-		//
+	// Exclude summaries with no change in battery level
+	var a []parseutils.ActivitySummary
+	for _, s := range rep.Summaries {
+		if s.InitialBatteryLevel != s.FinalBatteryLevel {
+			a = append(a, s)
+		}
+	}
 
+	if rep.TimestampsAltered {
+		fmt.Println("Some timestamps were changed while processing the log.")
+	}
+	if len(rep.Errs) > 0 {
+		fmt.Println("Errors encountered:")
+		for _, err := range rep.Errs {
+			fmt.Println(err.Error())
+		}
+	}
+	fmt.Println("\nNumber of summaries ", len(a), "\n")
+	for _, s := range a {
+		s.Print(&rep.OutputBuffer)
+	}
 
+	// Write the battery level summary csv to the csvFile specified
+	if csvWriter != nil && *summaryFormat == parseutils.FormatBatteryLevel {
+		// The dimension header line is only written if the file is the first one in the directory.
+		parseutils.BatteryLevelSummariesToCSV(csvWriter, &a, isFirstFile)
+	}
 
-
-
-
-
-	//
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
-	//br, fname, err := bugreportutils.ExtractBugReport(filePath, c)
-	//if err != nil {
-	//	log.Fatalf("Error getting file contents: %v", err)
-	//}
-	//fmt.Printf("Parsing %s\n", fname)
-	//
-	//writer := ioutil.Discard
-	//if csvWriter != nil && *summaryFormat == parseutils.FormatTotalTime {
-	//	writer = csvWriter
-	//}
-	//
-	//pkgs, errs := packageutils.ExtractAppsFromBugReport(br)
-	//if len(errs) > 0 {
-	//	log.Printf("Errors encountered when getting package list: %v\n", errs)
-	//}
-	//upm, errs := parseutils.UIDAndPackageNameMapping(br, pkgs)
-	//if len(errs) > 0 {
-	//	log.Printf("Errors encountered when generating package mapping: %v\n", errs)
-	//}
-	//rep := parseutils.AnalyzeHistory(writer, br, *summaryFormat, upm, *scrubPII)
-	//
-	//// Exclude summaries with no change in battery level
-	//var a []parseutils.ActivitySummary
-	//for _, s := range rep.Summaries {
-	//	if s.InitialBatteryLevel != s.FinalBatteryLevel {
-	//		a = append(a, s)
-	//	}
-	//}
-	//
-	//
-	//if rep.TimestampsAltered {
-	//	fmt.Println("Some timestamps were changed while processing the log.")
-	//}
-	//if len(rep.Errs) > 0 {
-	//	fmt.Println("Errors encountered:")
-	//	for _, err := range rep.Errs {
-	//		fmt.Println(err.Error())
-	//	}
-	//}
-	//fmt.Println("\nNumber of summaries ", len(a), "\n")
-	//for _, s := range a {
-	//	s.Print(&rep.OutputBuffer)
-	//}
-	//
-	//// Write the battery level summary csv to the csvFile specified
-	//if csvWriter != nil && *summaryFormat == parseutils.FormatBatteryLevel {
-	//	// The dimension header line is only written if the file is the first one in the directory.
-	//	parseutils.BatteryLevelSummariesToCSV(csvWriter, &a, isFirstFile)
-	//}
-
-//	return rep.OutputBuffer.String()
-
+	return rep.OutputBuffer.String()
 }
 
 func main() {
